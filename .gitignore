@@ -1,0 +1,19 @@
+# Geheimnisse & lokale Konfiguration
+.env
+
+# Laufzeitdaten
+*.db
+*.db.bak*
+*.db-journal
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

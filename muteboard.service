@@ -1,0 +1,24 @@
+[Unit]
+Description=Muteboard Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=muteboard
+Group=muteboard
+WorkingDirectory=/opt/muteboard
+ExecStart=/opt/muteboard/.venv/bin/python bot.py
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+# Härtung: Bot darf nur in sein eigenes Verzeichnis schreiben
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/muteboard
+
+[Install]
+WantedBy=multi-user.target
