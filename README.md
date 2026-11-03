@@ -129,7 +129,7 @@ journalctl -u muteboard -f
 
 ## Datenbank
 
-Alle Zeiten liegen in `muteboard.db` (SQLite). Eine Datenbank aus älteren Versionen wird beim Start automatisch migriert.
+Alle Zeiten liegen in `muteboard.db` (SQLite).
 Die Stumm-Quote startet nach dem Update auf eine Version mit Voice-Zeit-Messung erst mit der nächsten vollen Woche,
 damit die Quoten nicht verfälscht werden.
 

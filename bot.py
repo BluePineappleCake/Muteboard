@@ -83,7 +83,6 @@ class Store:
 
     def __init__(self, path: str):
         self.db = sqlite3.connect(path)
-        self._migrate()
         self.db.executescript(
             """
             CREATE TABLE IF NOT EXISTS totals (
@@ -107,25 +106,6 @@ class Store:
                 "SELECT 1 FROM totals WHERE period = ? LIMIT 1", (self.period,)).fetchone()
             self.set_meta("pct_start", self.period + 1 if has_data else self.period)
         self.db.commit()
-
-    def _migrate(self):
-        """Datenbank der ersten Version (ohne 'kind'-Spalte) übernehmen."""
-        cols = [r[1] for r in self.db.execute("PRAGMA table_info(totals)")]
-        if cols and "kind" not in cols:
-            log.info("Migriere alte Datenbank: bisherige Zeiten werden als Full Mute übernommen")
-            self.db.executescript(
-                f"""
-                ALTER TABLE totals RENAME TO totals_old;
-                CREATE TABLE totals (
-                    guild_id INTEGER, user_id INTEGER, period INTEGER,
-                    kind TEXT NOT NULL, seconds REAL,
-                    PRIMARY KEY (guild_id, user_id, period, kind)
-                );
-                INSERT INTO totals SELECT guild_id, user_id, period, '{DEAF}', seconds FROM totals_old;
-                DROP TABLE totals_old;
-                """
-            )
-            self.db.commit()
 
     # --- Meta ---------------------------------------------------------------
     def get_meta(self, key: str):
