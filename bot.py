@@ -286,6 +286,10 @@ class MuteBot(discord.Client):
         # (guild, user, spur) -> (art, monotonic start); spur = "mute" oder "voice"
         self.active: dict[tuple[int, int, str], tuple[str, float]] = {}
         self.next_post_try = 0.0  # nach fehlgeschlagenem Wochenpost: frühestens dann erneut
+        # Server des Leaderboard-Channels. Nur dort wird gemessen, da es nur einen
+        # Wochenpost (und damit nur einen Wochenwechsel) gibt. Wird in on_ready gesetzt.
+        self.home_guild_id: int | None = None
+        self.synced = False  # Commands nur einmal syncen, nicht bei jedem Reconnect
 
     async def setup_hook(self):
         self.tick.start()
@@ -318,7 +322,8 @@ class MuteBot(discord.Client):
     def reconcile(self):
         """Abgleich mit dem tatsächlichen Voice-Zustand (fängt verpasste Events ab)."""
         seen: dict[tuple[int, int, str], str] = {}
-        for guild in self.guilds:
+        guild = self.get_guild(self.home_guild_id) if self.home_guild_id else None
+        if guild:
             for channel in [*guild.voice_channels, *guild.stage_channels]:
                 for m in channel.members:
                     if m.bot or not in_counted_voice(m.voice, guild):
@@ -333,14 +338,24 @@ class MuteBot(discord.Client):
 
     # --- Events -------------------------------------------------------------
     async def on_ready(self):
-        for guild in self.guilds:  # Guild-Sync = Commands sofort sichtbar
+        # on_ready kommt nach jedem Reconnect erneut -> Einrichtung nur beim ersten Mal
+        if self.home_guild_id is None:
+            channel = self.get_channel(CHANNEL_ID) or await self.fetch_channel(CHANNEL_ID)
+            self.home_guild_id = channel.guild.id
+            others = [g.name for g in self.guilds if g.id != self.home_guild_id]
+            if others:
+                log.warning("Bot ist auch auf anderen Servern (%s). Gemessen wird nur auf '%s'.",
+                            ", ".join(others), channel.guild.name)
+        if not self.synced:
+            guild = discord.Object(id=self.home_guild_id)  # Guild-Sync = sofort sichtbar
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
+            self.synced = True
         self.reconcile()
         log.info("Eingeloggt als %s, %d aktive Sessions", self.user, len(self.active))
 
     async def on_voice_state_update(self, member, before, after):
-        if not member.bot:
+        if not member.bot and member.guild.id == self.home_guild_id:
             self.update_member(member.guild, member.id, after)
 
     # --- Minütlicher Takt: speichern + ggf. Wochenpost ----------------------
@@ -360,7 +375,7 @@ class MuteBot(discord.Client):
             self.store.set_meta("last_post", sched)
         elif sched > last and time.monotonic() >= self.next_post_try:
             try:
-                await self.post_weekly()
+                await self.post_weekly(sched)
             except discord.HTTPException as e:
                 # Woche wird NICHT abgeschlossen -> Post wird später nachgeholt
                 self.next_post_try = time.monotonic() + 600
@@ -373,14 +388,15 @@ class MuteBot(discord.Client):
             except Exception:
                 self.next_post_try = time.monotonic() + 600
                 log.exception("Wochenpost fehlgeschlagen, neuer Versuch in 10 min")
-                return
-            self.store.set_meta("last_post", sched)
 
     @tick.before_loop
     async def _wait_ready(self):
         await self.wait_until_ready()
 
-    async def post_weekly(self):
+    async def post_weekly(self, sched: float):
+        """Ranglisten posten, Woche abschließen, Rollen verteilen. Wirft nur, solange
+        noch nichts gesendet wurde. Danach gilt die Woche als erledigt, damit ein
+        späterer Fehler nicht zu einem doppelten Post führt."""
         channel = self.get_channel(CHANNEL_ID) or await self.fetch_channel(CHANNEL_ID)
         guild = channel.guild
         embeds, winners, lines = [], {}, []
@@ -395,16 +411,30 @@ class MuteBot(discord.Client):
         content = ("👑 **Die Sieger der Woche**\n" + "\n".join(lines)) if lines else None
         # Alle Embeds einer Nachricht zusammen dürfen max. 6000 Zeichen haben ->
         # bei langen Listen auf mehrere Nachrichten verteilen.
-        mentions = discord.AllowedMentions(users=True, roles=False)
-        batch: list[discord.Embed] = []
+        batches: list[list[discord.Embed]] = [[]]
         for embed in embeds:
-            if batch and sum(map(len, batch)) + len(embed) > MESSAGE_EMBEDS_MAX:
-                await channel.send(content=content, embeds=batch, allowed_mentions=mentions)
-                batch, content = [], None
-            batch.append(embed)
-        await channel.send(content=content, embeds=batch, allowed_mentions=mentions)
-        await self.award_roles(guild, winners)
+            if batches[-1] and sum(map(len, batches[-1])) + len(embed) > MESSAGE_EMBEDS_MAX:
+                batches.append([])
+            batches[-1].append(embed)
+
+        mentions = discord.AllowedMentions(users=True, roles=False)
+        for i, batch in enumerate(batches):
+            try:
+                await channel.send(content=content if i == 0 else None, embeds=batch,
+                                   allowed_mentions=mentions)
+            except Exception:
+                if i == 0:
+                    raise  # noch nichts gesendet -> tick versucht es später erneut
+                log.exception("Wochenpost unvollständig: Nachricht %d/%d fehlgeschlagen",
+                              i + 1, len(batches))
+                break
+
         self.store.next_period()
+        self.store.set_meta("last_post", sched)
+        try:
+            await self.award_roles(guild, winners)
+        except Exception:
+            log.exception("Fehler beim Verteilen der Sieger-Rollen")
 
     async def award_roles(self, guild: discord.Guild, winners: dict[str, int | None]):
         """Rolle vom bisherigen Sieger nehmen und dem neuen geben. Fehler (fehlende
@@ -435,6 +465,8 @@ class MuteBot(discord.Client):
         except discord.Forbidden:
             log.warning("Keine Berechtigung für Rolle '%s' – hat der Bot 'Rollen verwalten' "
                         "und steht seine Rolle über '%s'?", role.name, role.name)
+        except discord.HTTPException as e:
+            log.warning("Rolle '%s' für %s konnte nicht geändert werden: %s", role.name, user_id, e)
 
 
 bot = MuteBot()
@@ -456,6 +488,10 @@ bot = MuteBot()
 )
 async def muteboard(interaction: discord.Interaction, rangliste: str = DEAF,
                     zeitraum: str = "woche"):
+    if interaction.guild is None or interaction.guild.id != bot.home_guild_id:
+        await interaction.response.send_message(
+            "Das Muteboard läuft nur auf dem Server mit dem Leaderboard-Channel.", ephemeral=True)
+        return
     bot.flush()  # damit laufende Sessions mitzählen
     all_time = zeitraum == "gesamt"
     embed, _ = build_embed(bot.store, interaction.guild, rangliste, all_time,

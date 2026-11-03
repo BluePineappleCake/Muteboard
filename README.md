@@ -130,6 +130,7 @@ journalctl -u muteboard -f
 ## Datenbank
 
 Alle Zeiten liegen in `muteboard.db` (SQLite).
+Gemessen wird nur auf dem Server, zu dem `LEADERBOARD_CHANNEL_ID` gehört. Für mehrere Server braucht es je eine eigene Instanz mit eigener `.env` und Datenbank.
 Die Stumm-Quote startet nach dem Update auf eine Version mit Voice-Zeit-Messung erst mit der nächsten vollen Woche,
 damit die Quoten nicht verfälscht werden.
 
