@@ -50,7 +50,7 @@ DEAF, MUTE, ALL, PCT, VOICE = "deaf", "mute", "all", "pct", "voice"
 
 # Prozent-Rangliste: was zählt als "stumm" und wie viel Voice-Zeit braucht man mindestens
 PERCENT_BASIS = os.getenv("PERCENT_BASIS", ALL)          # "all" oder "deaf"
-PERCENT_MIN_MINUTES = int(os.getenv("PERCENT_MIN_MINUTES", "120"))
+PERCENT_MIN_MINUTES = int(os.getenv("PERCENT_MIN_MINUTES", "240"))
 
 # Rollen-IDs für die Sieger (leer = keine Rolle für diese Rangliste)
 ROLE_IDS = {
